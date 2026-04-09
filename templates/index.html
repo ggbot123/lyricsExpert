@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌词专家 - 歌手入口</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260408a') }}">
+</head>
+<body class="landing-body">
+  <button id="localDataToggle" class="local-data-toggle" type="button" aria-expanded="false" aria-controls="localDataDrawer">
+    本地歌手数据
+  </button>
+
+  <div id="localDataOverlay" class="local-data-overlay" hidden></div>
+
+  <aside id="localDataDrawer" class="local-data-drawer" aria-hidden="true" hidden>
+    <div class="local-data-head">
+      <strong>本地歌手数据</strong>
+      <button id="localDataClose" type="button">关闭</button>
+    </div>
+
+    <div class="local-data-actions">
+      <button id="localDataRefresh" type="button">刷新列表</button>
+      <button id="localDataSelectAll" type="button">全选</button>
+      <button id="localDataSelectNone" type="button">清空</button>
+    </div>
+
+    <p id="localDataStatus" class="status" role="status" aria-live="polite"></p>
+    <div id="localDataList" class="local-data-list"></div>
+
+    <div class="local-data-footer">
+      <button id="localDataDelete" type="button">清除选中歌手数据</button>
+    </div>
+  </aside>
+
+  <main class="landing-card">
+    <p class="eyebrow">Lyric Expert</p>
+    <h1>输入歌手名，探索词云与歌词</h1>
+    <p class="subtitle">输入后将进入分析页：自动准备该歌手数据、展示词云和高频词，并支持关键词检索。</p>
+
+    <form action="{{ url_for('go_artist') }}" method="post" class="artist-form">
+      <label for="artist_name">歌手名字</label>
+      <input id="artist_name" name="artist_name" type="text" placeholder="例如：陈奕迅" required>
+      <button type="submit">进入分析页</button>
+    </form>
+
+    <section class="followed-import" aria-labelledby="followed-import-title">
+      <h2 id="followed-import-title">导入我关注的艺人</h2>
+      <p class="subtitle">粘贴网易云登录 Cookie 后，可一键把关注艺人及其歌曲缓存到本地。</p>
+
+      <form id="followedImportForm" class="followed-form">
+        <label for="netease_cookie">网易云 Cookie</label>
+        <textarea id="netease_cookie" name="netease_cookie" rows="4" placeholder="MUSIC_U=...; __csrf=..." required></textarea>
+
+        <div class="followed-form-grid">
+          <div class="field">
+            <label for="max_artists">最多处理艺人数（0=全部）</label>
+            <input id="max_artists" name="max_artists" type="number" min="0" step="1" value="0">
+          </div>
+          <div class="field">
+            <label for="page_size">分页大小</label>
+            <input id="page_size" name="page_size" type="number" min="1" step="1" value="100">
+          </div>
+        </div>
+
+        <label class="switch-label" for="fetch_lyrics">
+          <input id="fetch_lyrics" name="fetch_lyrics" type="checkbox">
+          同时抓取歌词（耗时更久）
+        </label>
+
+        <div class="followed-actions">
+          <button id="loadFollowedArtistsBtn" type="button">1) 获取可选艺人列表</button>
+          <button id="followedImportBtn" type="submit">2) 导入选中艺人</button>
+        </div>
+
+        <div id="followedImportProgress" class="prepare-progress" hidden aria-live="polite">
+          <div class="prepare-progress-head">
+            <span id="followedImportLabel">导入任务进行中...</span>
+            <span id="followedImportPercent">0%</span>
+          </div>
+          <div class="prepare-bar-track">
+            <div id="followedImportBarFill" class="prepare-bar-fill"></div>
+          </div>
+        </div>
+
+        <div id="followedArtistsPanel" class="followed-list-panel" hidden>
+          <div class="followed-list-head">
+            <strong id="followedArtistsSummary"></strong>
+            <div class="followed-list-actions">
+              <button id="selectAllFollowedBtn" type="button">全选</button>
+              <button id="clearAllFollowedBtn" type="button">清空</button>
+            </div>
+          </div>
+          <div id="followedArtistsList" class="followed-list"></div>
+        </div>
+
+        <p id="followedImportStatus" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const toggleBtn = document.getElementById("localDataToggle");
+      const overlay = document.getElementById("localDataOverlay");
+      const drawer = document.getElementById("localDataDrawer");
+      const closeBtn = document.getElementById("localDataClose");
+      const refreshBtn = document.getElementById("localDataRefresh");
+      const selectAllBtn = document.getElementById("localDataSelectAll");
+      const selectNoneBtn = document.getElementById("localDataSelectNone");
+      const deleteBtn = document.getElementById("localDataDelete");
+      const status = document.getElementById("localDataStatus");
+      const listWrap = document.getElementById("localDataList");
+
+      if (!toggleBtn || !overlay || !drawer || !closeBtn || !refreshBtn || !selectAllBtn || !selectNoneBtn || !deleteBtn || !status || !listWrap) {
+        return;
+      }
+
+      function setStatus(text, isError) {
+        status.textContent = text || "";
+        status.classList.toggle("status-error", Boolean(isError));
+      }
+
+      function setDrawerOpen(open) {
+        drawer.hidden = !open;
+        drawer.classList.toggle("open", Boolean(open));
+        overlay.hidden = !open;
+        toggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+        drawer.setAttribute("aria-hidden", open ? "false" : "true");
+      }
+
+      function selectedIds() {
+        const checked = listWrap.querySelectorAll("input[name='local_artist_ids']:checked");
+        const ids = [];
+        checked.forEach(function (item) {
+          const value = Number(item.value);
+          if (Number.isFinite(value) && value > 0) {
+            ids.push(Math.floor(value));
+          }
+        });
+        return ids;
+      }
+
+      function renderArtists(artists) {
+        listWrap.innerHTML = "";
+        const items = Array.isArray(artists) ? artists : [];
+        if (!items.length) {
+          const empty = document.createElement("p");
+          empty.className = "status";
+          empty.textContent = "当前没有本地歌手数据。";
+          listWrap.appendChild(empty);
+          return;
+        }
+
+        const frag = document.createDocumentFragment();
+        items.forEach(function (item) {
+          const row = document.createElement("label");
+          row.className = "local-data-item";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.name = "local_artist_ids";
+          checkbox.value = String(item.artist_id);
+
+          const text = document.createElement("span");
+          text.textContent = String(item.artist_name || "未知歌手") + " (" + String(item.artist_id || "-") + ") · " + String(item.file_count || 0) + " 文件";
+
+          row.appendChild(checkbox);
+          row.appendChild(text);
+          frag.appendChild(row);
+        });
+        listWrap.appendChild(frag);
+      }
+
+      async function loadLocalArtists() {
+        refreshBtn.disabled = true;
+        setStatus("正在读取本地歌手列表...", false);
+        try {
+          const response = await fetch("/api/local-artists");
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "读取失败");
+          }
+          renderArtists(data.artists || []);
+          setStatus("已加载 " + String(data.total || 0) + " 位本地歌手。", false);
+        } catch (error) {
+          setStatus("读取失败：" + (error && error.message ? error.message : String(error)), true);
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+
+      toggleBtn.addEventListener("click", async function () {
+        const willOpen = !drawer.classList.contains("open");
+        setDrawerOpen(willOpen);
+        if (willOpen) {
+          await loadLocalArtists();
+        }
+      });
+
+      closeBtn.addEventListener("click", function () {
+        setDrawerOpen(false);
+      });
+
+      overlay.addEventListener("click", function () {
+        setDrawerOpen(false);
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && drawer.classList.contains("open")) {
+          setDrawerOpen(false);
+        }
+      });
+
+      refreshBtn.addEventListener("click", async function () {
+        await loadLocalArtists();
+      });
+
+      selectAllBtn.addEventListener("click", function () {
+        const all = listWrap.querySelectorAll("input[name='local_artist_ids']");
+        all.forEach(function (item) {
+          item.checked = true;
+        });
+      });
+
+      selectNoneBtn.addEventListener("click", function () {
+        const all = listWrap.querySelectorAll("input[name='local_artist_ids']");
+        all.forEach(function (item) {
+          item.checked = false;
+        });
+      });
+
+      deleteBtn.addEventListener("click", async function () {
+        const ids = selectedIds();
+        if (!ids.length) {
+          setStatus("请先勾选要清除的歌手。", true);
+          return;
+        }
+
+        const ok = window.confirm("确认清除所选歌手的本地数据吗？此操作不可恢复。");
+        if (!ok) {
+          return;
+        }
+
+        deleteBtn.disabled = true;
+        setStatus("正在删除本地数据...", false);
+        try {
+          const response = await fetch("/api/local-artists/delete", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ artist_ids: ids }),
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "删除失败");
+          }
+
+          renderArtists(data.artists || []);
+          setStatus("已清除 " + String(data.removed_artists || 0) + " 位歌手，共删除 " + String(data.removed_files || 0) + " 个文件。", false);
+        } catch (error) {
+          setStatus("删除失败：" + (error && error.message ? error.message : String(error)), true);
+        } finally {
+          deleteBtn.disabled = false;
+        }
+      });
+    })();
+
+    (function () {
+      const form = document.getElementById("followedImportForm");
+      const status = document.getElementById("followedImportStatus");
+      const submitBtn = document.getElementById("followedImportBtn");
+      const loadBtn = document.getElementById("loadFollowedArtistsBtn");
+      const listPanel = document.getElementById("followedArtistsPanel");
+      const listWrap = document.getElementById("followedArtistsList");
+      const summary = document.getElementById("followedArtistsSummary");
+      const selectAllBtn = document.getElementById("selectAllFollowedBtn");
+      const clearAllBtn = document.getElementById("clearAllFollowedBtn");
+      const importProgress = document.getElementById("followedImportProgress");
+      const importLabel = document.getElementById("followedImportLabel");
+      const importPercent = document.getElementById("followedImportPercent");
+      const importBarFill = document.getElementById("followedImportBarFill");
+
+      if (!form || !status || !submitBtn || !loadBtn || !listPanel || !listWrap || !summary || !selectAllBtn || !clearAllBtn || !importProgress || !importLabel || !importPercent || !importBarFill) {
+        return;
+      }
+
+      let cachedArtists = [];
+
+      function setStatus(text, isError) {
+        status.textContent = text || "";
+        status.classList.toggle("status-error", Boolean(isError));
+      }
+
+      function sleep(ms) {
+        return new Promise(function (resolve) {
+          setTimeout(resolve, ms);
+        });
+      }
+
+      function updateImportProgress(progress, message) {
+        const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+        importProgress.hidden = false;
+        importPercent.textContent = String(safeProgress) + "%";
+        importLabel.textContent = message || "导入任务进行中...";
+        importBarFill.style.width = String(safeProgress) + "%";
+      }
+
+      async function pollImportTask(taskId) {
+        while (true) {
+          const resp = await fetch("/api/followed-artists/import-progress/" + encodeURIComponent(taskId));
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) {
+            throw new Error(data.error || "读取导入进度失败");
+          }
+
+          updateImportProgress(data.progress, data.message);
+
+          if (data.status === "completed") {
+            return data;
+          }
+          if (data.status === "failed") {
+            throw new Error(data.error || data.message || "导入失败");
+          }
+
+          await sleep(800);
+        }
+      }
+
+      function getCookie() {
+        return String(document.getElementById("netease_cookie").value || "").trim();
+      }
+
+      function getMaxArtists() {
+        const value = Number(document.getElementById("max_artists").value || 0);
+        return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+      }
+
+      function getPageSize() {
+        const value = Number(document.getElementById("page_size").value || 100);
+        return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 100;
+      }
+
+      function getSelectedArtistIds() {
+        const checked = listWrap.querySelectorAll("input[name='selected_artist_ids']:checked");
+        const ids = [];
+        checked.forEach(function (input) {
+          const raw = Number(input.value);
+          if (Number.isFinite(raw)) {
+            ids.push(Math.floor(raw));
+          }
+        });
+        return ids;
+      }
+
+      function renderArtists(artists, totalFollowed) {
+        cachedArtists = Array.isArray(artists) ? artists.slice() : [];
+        listWrap.innerHTML = "";
+
+        if (!cachedArtists.length) {
+          summary.textContent = "未获取到可选艺人";
+          listPanel.hidden = false;
+          return;
+        }
+
+        const visible = cachedArtists.length;
+        summary.textContent = "已获取 " + visible + " 位可选艺人（账号共关注 " + totalFollowed + " 位）";
+
+        const frag = document.createDocumentFragment();
+        cachedArtists.forEach(function (item) {
+          const row = document.createElement("label");
+          row.className = "followed-item";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.name = "selected_artist_ids";
+          checkbox.value = String(item.artist_id);
+          checkbox.checked = true;
+
+          const text = document.createElement("span");
+          text.textContent = String(item.artist_name || "未知艺人") + " (" + String(item.artist_id || "-") + ")";
+
+          row.appendChild(checkbox);
+          row.appendChild(text);
+          frag.appendChild(row);
+        });
+
+        listWrap.appendChild(frag);
+        listPanel.hidden = false;
+      }
+
+      loadBtn.addEventListener("click", async function () {
+        const cookie = getCookie();
+        if (!cookie) {
+          setStatus("请先填写网易云 Cookie", true);
+          return;
+        }
+
+        loadBtn.disabled = true;
+        setStatus("正在读取关注艺人列表...", false);
+
+        try {
+          const response = await fetch("/api/followed-artists/list", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              cookie: cookie,
+              max_artists: getMaxArtists(),
+              page_size: getPageSize()
+            })
+          });
+
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "读取关注艺人失败");
+          }
+
+          renderArtists(data.artists || [], Number(data.total_followed || 0));
+          setStatus("艺人列表已加载，请勾选后点击“导入选中艺人”。", false);
+        } catch (error) {
+          setStatus("读取失败：" + (error && error.message ? error.message : String(error)), true);
+        } finally {
+          loadBtn.disabled = false;
+        }
+      });
+
+      selectAllBtn.addEventListener("click", function () {
+        const all = listWrap.querySelectorAll("input[name='selected_artist_ids']");
+        all.forEach(function (input) {
+          input.checked = true;
+        });
+      });
+
+      clearAllBtn.addEventListener("click", function () {
+        const all = listWrap.querySelectorAll("input[name='selected_artist_ids']");
+        all.forEach(function (input) {
+          input.checked = false;
+        });
+      });
+
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        const cookie = getCookie();
+        const maxArtists = getMaxArtists();
+        const pageSize = getPageSize();
+        const fetchLyrics = Boolean(document.getElementById("fetch_lyrics").checked);
+        const selectedArtistIds = getSelectedArtistIds();
+
+        if (!cookie) {
+          setStatus("请先填写网易云 Cookie", true);
+          return;
+        }
+
+        if (!selectedArtistIds.length) {
+          setStatus("请先获取并勾选至少一位艺人", true);
+          return;
+        }
+
+        submitBtn.disabled = true;
+        loadBtn.disabled = true;
+        updateImportProgress(0, "导入任务创建中...");
+        setStatus("正在导入关注艺人，请稍候...", false);
+
+        try {
+          const response = await fetch("/api/followed-artists/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              cookie: cookie,
+              max_artists: maxArtists,
+              page_size: pageSize,
+              fetch_lyrics: fetchLyrics,
+              selected_artist_ids: selectedArtistIds
+            })
+          });
+
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "导入失败");
+          }
+
+          const taskId = String(data.task_id || "");
+          if (!taskId) {
+            throw new Error("未返回任务 ID");
+          }
+
+          const finalData = await pollImportTask(taskId);
+
+          setStatus(
+            "导入完成：共关注 " + finalData.total_followed + " 位，已处理 " + finalData.processed_artists + " 位。",
+            false
+          );
+        } catch (error) {
+          setStatus("导入失败：" + (error && error.message ? error.message : String(error)), true);
+        } finally {
+          submitBtn.disabled = false;
+          loadBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

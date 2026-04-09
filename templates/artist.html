@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌词专家 - 歌手分析</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260408') }}">
+</head>
+<body class="artist-body" data-artist-id="{{ artist_id }}" data-artist-name="{{ artist_name }}">
+  <header class="topbar">
+    <a class="home-link" href="{{ url_for('index') }}">返回首页</a>
+    <h1 id="artist-title">歌手分析</h1>
+  </header>
+
+  <main class="container">
+    <section class="panel search-panel">
+      <div class="panel-head">
+        <h2>1) 歌词搜索</h2>
+        <span id="search-status" class="status"></span>
+      </div>
+
+      <form id="search-form" class="search-form">
+        <div class="field">
+          <label for="search-artist">歌手</label>
+          <input id="search-artist" type="text" placeholder="可修改歌手">
+        </div>
+        <div class="field">
+          <label for="search-keyword">关键词</label>
+          <input id="search-keyword" type="text" placeholder="例如：孤独" required>
+        </div>
+        <button type="submit">搜索歌词</button>
+      </form>
+
+      <div class="search-summary" id="search-summary"></div>
+      <div id="search-results" class="search-results"></div>
+
+      <div class="pager">
+        <button id="search-prev">上一页</button>
+        <span id="search-page">1 / 1</span>
+        <button id="search-next">下一页</button>
+      </div>
+    </section>
+
+    <section class="panel wordcloud-panel">
+      <div class="panel-head">
+        <h2>2) 词云与词语频次</h2>
+        <div class="wc-controls">
+          <label class="switch-label" for="keep-single-char">
+            <input id="keep-single-char" type="checkbox">
+            <span>保留单字</span>
+          </label>
+          <label class="switch-label" for="count-by-song">
+            <input id="count-by-song" type="checkbox" checked>
+            <span>按歌曲数统计</span>
+          </label>
+          <label class="switch-label" for="filter-english-words">
+            <input id="filter-english-words" type="checkbox" checked>
+            <span>过滤英文单词</span>
+          </label>
+          <button id="refresh-wordcloud" type="button">刷新词云</button>
+          <span id="wc-status" class="status">加载中...</span>
+        </div>
+      </div>
+
+      <div id="prepare-progress" class="prepare-progress" aria-live="polite">
+        <div class="prepare-progress-head">
+          <span id="prepare-label">准备歌手数据中...</span>
+          <span id="prepare-percent">0%</span>
+        </div>
+        <div class="prepare-bar-track">
+          <div id="prepare-bar-fill" class="prepare-bar-fill"></div>
+        </div>
+      </div>
+
+      <div class="wc-layout">
+        <div class="wc-left">
+          <div class="wordcloud-wrap">
+            <img id="wordcloud-image" alt="词云图">
+          </div>
+
+          <div class="ai-box">
+            <div class="ai-head">
+              <strong>AI 情感分析</strong>
+              <button id="analyze-sentiment" type="button">分析当前词云</button>
+            </div>
+            <p id="ai-status" class="status"></p>
+            <pre id="ai-result" class="ai-result"></pre>
+          </div>
+        </div>
+
+        <div class="wc-right">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>排名</th>
+                  <th>词语</th>
+                  <th>频次</th>
+                  <th>歌曲比例</th>
+                </tr>
+              </thead>
+              <tbody id="top-words-body"></tbody>
+            </table>
+          </div>
+
+          <div class="pager">
+            <button id="wc-prev">上一页</button>
+            <span id="wc-page">1 / 1</span>
+            <button id="wc-next">下一页</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel ratio-panel">
+      <div class="panel-head">
+        <h2>3) 词语跨歌手占比排名</h2>
+        <span id="ratio-status" class="status"></span>
+      </div>
+
+      <form id="ratio-form" class="ratio-form">
+        <div class="field">
+          <label for="ratio-word">词语</label>
+          <input id="ratio-word" type="text" placeholder="例如：孤独" required>
+        </div>
+        <label class="switch-label" for="quick-rank-mode">
+          <input id="quick-rank-mode" type="checkbox">
+          <span>快速排名（仅高频词表）</span>
+        </label>
+        <button type="submit">查看占比排名</button>
+      </form>
+
+      <div id="ratio-progress" class="prepare-progress" aria-live="polite" style="display: none;">
+        <div class="prepare-progress-head">
+          <span id="ratio-progress-label">正在计算词语占比排名...</span>
+          <span id="ratio-progress-percent">0%</span>
+        </div>
+        <div class="prepare-bar-track">
+          <div id="ratio-progress-fill" class="prepare-bar-fill"></div>
+        </div>
+      </div>
+
+      <div id="ratio-summary" class="ratio-summary"></div>
+      <div class="table-wrap ratio-table-wrap">
+        <table class="ratio-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>歌手</th>
+              <th>词语频次</th>
+              <th>占比</th>
+              <th>基数</th>
+            </tr>
+          </thead>
+          <tbody id="ratio-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const pageBody = document.body;
+    const initialArtistId = Number(pageBody.dataset.artistId || "0");
+    const initialArtistName = pageBody.dataset.artistName || "";
+
+    const state = {
+      artistId: initialArtistId,
+      artistName: initialArtistName || "",
+      wcPage: 1,
+      wcTotalPages: 1,
+      keepSingleChar: false,
+      countBySong: true,
+      filterEnglishWords: true,
+      quickRankMode: false,
+      searchPage: 1,
+      searchTotalPages: 1,
+      keyword: "",
+      searchArtistName: initialArtistName || "",
+      ratioWord: "",
+    };
+
+    const artistTitle = document.getElementById("artist-title");
+    const wcStatus = document.getElementById("wc-status");
+    const keepSingleCharInput = document.getElementById("keep-single-char");
+    const countBySongInput = document.getElementById("count-by-song");
+    const filterEnglishWordsInput = document.getElementById("filter-english-words");
+    const refreshWordcloudBtn = document.getElementById("refresh-wordcloud");
+    const wcImage = document.getElementById("wordcloud-image");
+    const wcBody = document.getElementById("top-words-body");
+    const wcPageLabel = document.getElementById("wc-page");
+    const analyzeSentimentBtn = document.getElementById("analyze-sentiment");
+    const aiStatus = document.getElementById("ai-status");
+    const aiResult = document.getElementById("ai-result");
+    const prepareProgress = document.getElementById("prepare-progress");
+    const prepareLabel = document.getElementById("prepare-label");
+    const preparePercent = document.getElementById("prepare-percent");
+    const prepareBarFill = document.getElementById("prepare-bar-fill");
+
+    const searchStatus = document.getElementById("search-status");
+    const searchForm = document.getElementById("search-form");
+    const searchArtistInput = document.getElementById("search-artist");
+    const searchKeywordInput = document.getElementById("search-keyword");
+    const searchSummary = document.getElementById("search-summary");
+    const searchResults = document.getElementById("search-results");
+    const searchPageLabel = document.getElementById("search-page");
+    const ratioStatus = document.getElementById("ratio-status");
+    const ratioForm = document.getElementById("ratio-form");
+    const ratioWordInput = document.getElementById("ratio-word");
+    const quickRankModeInput = document.getElementById("quick-rank-mode");
+    const ratioSummary = document.getElementById("ratio-summary");
+    const ratioBody = document.getElementById("ratio-body");
+    const ratioProgress = document.getElementById("ratio-progress");
+    const ratioProgressLabel = document.getElementById("ratio-progress-label");
+    const ratioProgressPercent = document.getElementById("ratio-progress-percent");
+    const ratioProgressFill = document.getElementById("ratio-progress-fill");
+
+    function updateRatioProgress(progress, label) {
+      const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+      ratioProgress.style.display = "block";
+      ratioProgressPercent.textContent = `${safeProgress}%`;
+      ratioProgressLabel.textContent = label || "正在计算词语占比排名...";
+      ratioProgressFill.style.width = `${safeProgress}%`;
+    }
+
+    function startRatioProgress() {
+      updateRatioProgress(0, "正在创建计算任务...");
+    }
+
+    function finishRatioProgress(success, label = "") {
+      if (success) {
+        updateRatioProgress(100, label || "计算完成");
+      } else {
+        updateRatioProgress(100, label || "计算结束");
+      }
+
+      setTimeout(() => {
+        ratioProgress.style.display = "none";
+      }, 450);
+    }
+
+    keepSingleCharInput.checked = state.keepSingleChar;
+    countBySongInput.checked = state.countBySong;
+    filterEnglishWordsInput.checked = state.filterEnglishWords;
+    quickRankModeInput.checked = state.quickRankMode;
+
+    function setArtistTitle() {
+      const text = state.artistName ? `歌手分析：${state.artistName}` : `歌手分析：ID ${state.artistId}`;
+      artistTitle.textContent = text;
+      searchArtistInput.value = state.searchArtistName || state.artistName;
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function updatePrepareProgress(progress, message) {
+      const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+      prepareProgress.style.display = "block";
+      preparePercent.textContent = `${safeProgress}%`;
+      prepareLabel.textContent = message || "准备歌手数据中...";
+      prepareBarFill.style.width = `${safeProgress}%`;
+      wcStatus.textContent = message || "准备歌手数据中...";
+    }
+
+    async function prepareArtistData() {
+      updatePrepareProgress(0, "准备任务创建中...");
+      const resp = await fetch(`/api/artist/${state.artistId}/prepare`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ artist_name: state.artistName || "" }),
+      });
+
+      const startData = await resp.json();
+      if (!startData.ok) {
+        throw new Error(startData.error || "准备任务创建失败");
+      }
+
+      const taskId = startData.task_id;
+      while (true) {
+        const progressResp = await fetch(`/api/progress/${taskId}`);
+        const progressData = await progressResp.json();
+        if (!progressData.ok) {
+          throw new Error(progressData.error || "读取进度失败");
+        }
+
+        updatePrepareProgress(progressData.progress, progressData.message);
+
+        if (progressData.status === "completed") {
+          updatePrepareProgress(100, "数据准备完成，正在加载词云...");
+          return;
+        }
+
+        if (progressData.status === "failed") {
+          throw new Error(progressData.error || progressData.message || "准备任务失败");
+        }
+
+        await sleep(800);
+      }
+    }
+
+    async function loadWordcloud(forceRefresh = false) {
+      wcStatus.textContent = "正在准备词云数据...";
+      const params = new URLSearchParams({
+        page: String(state.wcPage),
+        page_size: "20",
+        skip_prepare: "1",
+        keep_single_char: state.keepSingleChar ? "1" : "0",
+        count_by_song: state.countBySong ? "1" : "0",
+        filter_english_words: state.filterEnglishWords ? "1" : "0",
+      });
+      if (forceRefresh) {
+        params.set("refresh", "1");
+      }
+      if (state.artistName) {
+        params.set("artist_name", state.artistName);
+      }
+
+      const resp = await fetch(`/api/artist/${state.artistId}/wordcloud?${params.toString()}`);
+      const data = await resp.json();
+      if (!data.ok) {
+        wcStatus.textContent = `词云加载失败：${data.error || "未知错误"}`;
+        return;
+      }
+
+      if (data.artist_name) {
+        state.artistName = data.artist_name;
+      }
+
+      wcImage.src = `${data.image_url}?v=${Date.now()}`;
+      wcBody.innerHTML = "";
+
+      for (const item of data.top_words.items) {
+        const tr = document.createElement("tr");
+        let ratioText = "-";
+        if (state.countBySong && typeof item.song_ratio === "number") {
+          ratioText = `${(item.song_ratio * 100).toFixed(1)}%`;
+        }
+        tr.innerHTML = `<td>${item.rank}</td><td>${item.word}</td><td>${item.count}</td><td>${ratioText}</td>`;
+        wcBody.appendChild(tr);
+      }
+
+      state.wcTotalPages = data.top_words.total_pages || 1;
+      wcPageLabel.textContent = `${data.top_words.page} / ${state.wcTotalPages}`;
+      const modeText = state.keepSingleChar ? "保留单字" : "不保留单字";
+      const countModeText = state.countBySong ? "按歌曲数" : "按出现次数";
+      const englishModeText = state.filterEnglishWords ? "过滤英文词" : "保留英文词";
+      if (data.memory_mode) {
+        const songText = state.countBySong ? `，基于 ${data.song_total || 0} 首歌` : "";
+        wcStatus.textContent = `磁盘空间不足，已切换临时词云模式（${modeText}，${countModeText}，${englishModeText}${songText}），共 ${data.top_words.total} 个高频词`;
+      } else {
+        const songText = state.countBySong ? `，基于 ${data.song_total || 0} 首歌` : "";
+        wcStatus.textContent = `已加载（${modeText}，${countModeText}，${englishModeText}${songText}），共 ${data.top_words.total} 个高频词`;
+      }
+      setArtistTitle();
+    }
+    function renderWordRatioRows(items) {
+      ratioBody.innerHTML = "";
+      for (const item of items) {
+        const tr = document.createElement("tr");
+        if (Number(item.artist_id) === Number(state.artistId)) {
+          tr.classList.add("current-artist");
+        }
+
+        const tdRank = document.createElement("td");
+        tdRank.textContent = String(item.rank ?? "-");
+        const tdName = document.createElement("td");
+        tdName.textContent = item.artist_name || `歌手 ${item.artist_id}`;
+        const tdCount = document.createElement("td");
+        tdCount.textContent = String(item.word_count ?? 0);
+        const tdRatio = document.createElement("td");
+        const ratioNum = Number(item.ratio || 0);
+        tdRatio.textContent = `${(ratioNum * 100).toFixed(3)}%`;
+        const tdBase = document.createElement("td");
+        tdBase.textContent = String(item.total_base ?? 0);
+
+        tr.appendChild(tdRank);
+        tr.appendChild(tdName);
+        tr.appendChild(tdCount);
+        tr.appendChild(tdRatio);
+        tr.appendChild(tdBase);
+        ratioBody.appendChild(tr);
+      }
+    }
+
+    async function runWordRatioRanking() {
+      if (!state.ratioWord) {
+        return;
+      }
+
+      startRatioProgress();
+      ratioStatus.textContent = "计算中...";
+      ratioSummary.textContent = "";
+
+      const payload = {
+        word: state.ratioWord,
+        keep_single_char: state.keepSingleChar,
+        count_by_song: state.countBySong,
+        filter_english_words: state.filterEnglishWords,
+        quick_mode: state.quickRankMode,
+        current_artist_id: state.artistId,
+      };
+
+      const startResp = await fetch("/api/word-ratio-rank/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const startData = await startResp.json();
+      if (!startData.ok || !startData.task_id) {
+        finishRatioProgress(false, "任务创建失败");
+        ratioStatus.textContent = `计算失败：${startData.error || "未知错误"}`;
+        ratioBody.innerHTML = "";
+        ratioSummary.textContent = "";
+        return;
+      }
+
+      const taskId = startData.task_id;
+      let data = null;
+      while (true) {
+        const progressResp = await fetch(`/api/word-ratio-rank/progress/${taskId}`);
+        data = await progressResp.json();
+
+        if (!data.ok) {
+          finishRatioProgress(false, "读取进度失败");
+          ratioStatus.textContent = `计算失败：${data.error || "读取进度失败"}`;
+          ratioBody.innerHTML = "";
+          ratioSummary.textContent = "";
+          return;
+        }
+
+        updateRatioProgress(data.progress, data.message || "正在计算词语占比排名...");
+
+        if (data.status === "completed") {
+          break;
+        }
+        if (data.status === "failed") {
+          finishRatioProgress(false, data.message || "计算失败");
+          ratioStatus.textContent = `计算失败：${data.error || data.message || "未知错误"}`;
+          ratioBody.innerHTML = "";
+          ratioSummary.textContent = "";
+          return;
+        }
+
+        await sleep(200);
+      }
+
+      const result = data.result || {};
+
+      renderWordRatioRows(result.items || []);
+      const modeText = result.count_by_song ? "按歌曲覆盖数" : "按总词频";
+      const rankText = result.current_artist_rank ? `当前歌手排名第 ${result.current_artist_rank}` : "当前歌手未进入榜单";
+      const quickText = result.quick_mode ? "当前为快速模式（基于高频词表）" : "当前为精确模式（基于歌词重算）";
+      ratioSummary.textContent = `词语“${result.word || state.ratioWord}”在本地 ${result.total_artists || 0} 位歌手中，命中 ${result.matched_artists || 0} 位（${modeText}）。${rankText}。${quickText}。`;
+      ratioStatus.textContent = "计算完成";
+      finishRatioProgress(true, data.message || "计算完成");
+    }
+
+    keepSingleCharInput.addEventListener("change", async () => {
+      state.keepSingleChar = keepSingleCharInput.checked;
+      state.wcPage = 1;
+      await loadWordcloud();
+      if (state.ratioWord) {
+        await runWordRatioRanking();
+      }
+    });
+    ratioForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      state.ratioWord = ratioWordInput.value.trim();
+      state.quickRankMode = quickRankModeInput.checked;
+      await runWordRatioRanking();
+    });
+
+    countBySongInput.addEventListener("change", async () => {
+      state.countBySong = countBySongInput.checked;
+      state.wcPage = 1;
+      await loadWordcloud();
+      if (state.ratioWord) {
+        await runWordRatioRanking();
+      }
+    });
+
+    filterEnglishWordsInput.addEventListener("change", async () => {
+      state.filterEnglishWords = filterEnglishWordsInput.checked;
+      state.wcPage = 1;
+      await loadWordcloud();
+      if (state.ratioWord) {
+        await runWordRatioRanking();
+      }
+    });
+
+    refreshWordcloudBtn.addEventListener("click", async () => {
+      refreshWordcloudBtn.disabled = true;
+      wcStatus.textContent = "正在刷新词云...";
+      try {
+        await loadWordcloud(true);
+      } finally {
+        refreshWordcloudBtn.disabled = false;
+      }
+    });
+
+    analyzeSentimentBtn.addEventListener("click", async () => {
+      analyzeSentimentBtn.disabled = true;
+      aiStatus.textContent = "AI 分析中...";
+      aiResult.textContent = "";
+      try {
+        const resp = await fetch(`/api/artist/${state.artistId}/ai-sentiment`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            artist_name: state.artistName || "",
+            keep_single_char: state.keepSingleChar,
+            count_by_song: state.countBySong,
+            filter_english_words: state.filterEnglishWords,
+            topn: 80,
+          }),
+        });
+        const data = await resp.json();
+        if (!data.ok) {
+          aiStatus.textContent = `AI 分析失败：${data.error || "未知错误"}`;
+          return;
+        }
+
+        aiStatus.textContent = `分析完成（模型：${data.model}）`;
+        aiResult.textContent = data.analysis || "无分析结果";
+      } catch (e) {
+        aiStatus.textContent = `AI 分析失败：${e}`;
+      } finally {
+        analyzeSentimentBtn.disabled = false;
+      }
+    });
+
+    async function runSearch() {
+      if (!state.keyword) {
+        return;
+      }
+      searchStatus.textContent = "检索中...";
+
+      const payload = {
+        keyword: state.keyword,
+        page: state.searchPage,
+        page_size: 8,
+      };
+
+      if (state.searchArtistName) {
+        payload.artist_name = state.searchArtistName;
+      } else {
+        payload.artist_id = state.artistId;
+      }
+
+      const resp = await fetch("/api/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+
+      if (!data.ok) {
+        searchStatus.textContent = `搜索失败：${data.error || "未知错误"}`;
+        searchResults.innerHTML = "";
+        searchSummary.textContent = "";
+        return;
+      }
+
+      if (data.artist_name) {
+        state.artistName = data.artist_name;
+        state.searchArtistName = data.artist_name;
+      }
+      if (data.artist_id) {
+        state.artistId = data.artist_id;
+      }
+
+      searchSummary.textContent = `关键词“${data.keyword}”，命中歌曲 ${data.hit_song_count} 首，总出现 ${data.total_count} 次。`;
+      searchResults.innerHTML = "";
+
+      for (const item of data.results.items) {
+        const card = document.createElement("article");
+        card.className = "result-card";
+
+        const lines = (item.hit_lines || []).map(line => `<li>${line}</li>`).join("");
+        card.innerHTML = `
+          <h3>${item.song_name} <small>(${item.count} 次)</small></h3>
+          <ul>${lines || "<li>该歌曲命中但无可展示行</li>"}</ul>
+        `;
+        searchResults.appendChild(card);
+      }
+
+      state.searchTotalPages = data.results.total_pages || 1;
+      searchPageLabel.textContent = `${data.results.page} / ${state.searchTotalPages}`;
+      searchStatus.textContent = "搜索完成";
+      setArtistTitle();
+    }
+
+    document.getElementById("wc-prev").addEventListener("click", async () => {
+      if (state.wcPage <= 1) {
+        return;
+      }
+      state.wcPage -= 1;
+      await loadWordcloud();
+    });
+
+    document.getElementById("wc-next").addEventListener("click", async () => {
+      if (state.wcPage >= state.wcTotalPages) {
+        return;
+      }
+      state.wcPage += 1;
+      await loadWordcloud();
+    });
+
+    searchForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      state.keyword = searchKeywordInput.value.trim();
+      state.searchArtistName = searchArtistInput.value.trim();
+      state.searchPage = 1;
+      await runSearch();
+    });
+
+    document.getElementById("search-prev").addEventListener("click", async () => {
+      if (state.searchPage <= 1) {
+        return;
+      }
+      state.searchPage -= 1;
+      await runSearch();
+    });
+
+    document.getElementById("search-next").addEventListener("click", async () => {
+      if (state.searchPage >= state.searchTotalPages) {
+        return;
+      }
+      state.searchPage += 1;
+      await runSearch();
+    });
+
+    (async () => {
+      setArtistTitle();
+      try {
+        await prepareArtistData();
+        await loadWordcloud();
+        prepareProgress.style.display = "none";
+      } catch (e) {
+        wcStatus.textContent = `词云加载异常：${e}`;
+      }
+    })();
+  </script>
+</body>
+</html>
